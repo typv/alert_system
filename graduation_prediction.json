@@ -1,0 +1,262 @@
+{
+    "cells": [
+     {
+      "cell_type": "markdown",
+      "id": "0e8b2f6d",
+      "metadata": {},
+      "source": [
+       "# Dự đoán kết quả tốt nghiệp\n",
+       "\n",
+       "Notebook này minh họa quá trình tiền xử lý dữ liệu, lựa chọn đặc trưng và xây dựng mô hình dự đoán kết quả tốt nghiệp dựa trên file `raw_data.csv`.\n",
+       "\n",
+       "Các bước chính bao gồm:\n",
+       "1. Đọc dữ liệu và khám phá thông tin dữ liệu\n",
+       "2. Tiền xử lý: xử lý missing value, mã hóa biến phân loại, chuẩn hóa dữ liệu\n",
+       "3. Lựa chọn đặc trưng qua các phương pháp thống kê và RFE\n",
+       "4. Xây dựng, đánh giá mô hình Logistic Regression\n",
+       "5. Lưu mô hình\n"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "9a9f68be",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 1. Import các thư viện cần thiết\n",
+       "import pandas as pd\n",
+       "import numpy as np\n",
+       "import matplotlib.pyplot as plt\n",
+       "import seaborn as sns\n",
+       "\n",
+       "from sklearn.model_selection import train_test_split, cross_val_score\n",
+       "from sklearn.preprocessing import StandardScaler\n",
+       "from sklearn.feature_selection import chi2, RFE\n",
+       "from sklearn.linear_model import LogisticRegression\n",
+       "from sklearn.ensemble import RandomForestClassifier\n",
+       "from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix\n",
+       "\n",
+       "import joblib\n",
+       "\n",
+       "%matplotlib inline"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "81d0b8d3",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 2. Đọc dữ liệu từ file CSV\n",
+       "df = pd.read_csv('raw_data.csv')\n",
+       "print(\"Dữ liệu ban đầu:\")\n",
+       "print(df.head())"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "5eb5344c",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 3. Tiền xử lý dữ liệu\n",
+       "\n",
+       "# 3.1. Kiểm tra thông tin và số lượng giá trị thiếu\n",
+       "print(\"\\nThông tin dữ liệu:\")\n",
+       "print(df.info())\n",
+       "print(\"\\nSố lượng giá trị thiếu theo cột:\")\n",
+       "print(df.isnull().sum())"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "84c44b17",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 3.2. Xử lý biến mục tiêu\n",
+       "# Ở đây, cột \"KET QUA\" có giá trị như \"Tốt nghiệp Khá - 4 năm\", \"Buộc Thôi học\", \"Cảnh báo\"...\n",
+       "# Quy ước: Nếu có \"Tốt nghiệp\" thì nhãn = 1 (đạt tốt nghiệp), ngược lại = 0\n",
+       "def label_target(x):\n",
+       "    if \"Tốt nghiệp\" in x:\n",
+       "        return 1\n",
+       "    else:\n",
+       "        return 0\n",
+       "\n",
+       "df['target'] = df['KET QUA'].apply(label_target)"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "6f9a48f7",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 3.3. Xử lý giá trị thiếu cho các cột số\n",
+       "for col in ['TBHK', 'TCTL', 'TBTL']:\n",
+       "    df[col].fillna(df[col].mean(), inplace=True)\n",
+       "\n",
+       "# 3.4. Mã hóa các biến phân loại: Nganh, Gioi tinh, Doi tuong, Khu vuc, Khoi TS\n",
+       "categorical_cols = ['Nganh', 'Gioi tinh', 'Doi tuong', 'Khu vuc', 'Khoi TS']\n",
+       "df[categorical_cols] = df[categorical_cols].astype(str)\n",
+       "\n",
+       "# One-Hot Encoding (drop_first=True để tránh đa cộng tuyến)\n",
+       "df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)\n",
+       "\n",
+       "# 3.5. Chuẩn hóa các biến số\n",
+       "num_cols = ['Diem TS', 'Hoc Ky', 'DKHK', 'TBHK', 'TCTL', 'TBTL', 'Diem TN']\n",
+       "scaler = StandardScaler()\n",
+       "df_encoded[num_cols] = scaler.fit_transform(df_encoded[num_cols])\n",
+       "\n",
+       "print(\"\\nDữ liệu sau khi tiền xử lý:\")\n",
+       "print(df_encoded.head())"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b92f90fa",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 4. Lựa chọn đặc trưng\n",
+       "\n",
+       "# Tách dữ liệu thành biến đầu vào X và biến mục tiêu y\n",
+       "# Loại bỏ các cột không cần thiết như ID, KET QUA và cột target đã được tạo\n",
+       "X = df_encoded.drop(['ID', 'KET QUA', 'target'], axis=1)\n",
+       "y = df_encoded['target']\n",
+       "\n",
+       "# 4.1. Vẽ heatmap tương quan\n",
+       "plt.figure(figsize=(12, 8))\n",
+       "sns.heatmap(df_encoded.corr(), annot=False, cmap='coolwarm')\n",
+       "plt.title(\"Heatmap tương quan\")\n",
+       "plt.show()"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "6b5e04df",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 4.2. Sử dụng phương pháp Filter: Chi-square (áp dụng cho dữ liệu không âm)\n",
+       "# Lưu ý: Chọn các cột có giá trị không âm, ví dụ: \"Hoc Ky\", \"DKHK\"\n",
+       "X_chi2 = X[['Hoc Ky', 'DKHK']]\n",
+       "chi_scores, p_values = chi2(X_chi2, y)\n",
+       "chi2_results = pd.DataFrame({'Feature': X_chi2.columns, 'Chi2': chi_scores, 'p-value': p_values})\n",
+       "chi2_results.sort_values(by='Chi2', ascending=False, inplace=True)\n",
+       "print(\"\\nKết quả Chi-square:\")\n",
+       "print(chi2_results)"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "e9cc3e20",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 4.3. Sử dụng Wrapper Method: Recursive Feature Elimination (RFE)\n",
+       "model_lr = LogisticRegression(max_iter=1000)\n",
+       "# Chọn 10 đặc trưng quan trọng nhất (số lượng này có thể điều chỉnh)\n",
+       "rfe = RFE(model_lr, n_features_to_select=10)\n",
+       "rfe.fit(X, y)\n",
+       "selected_features = X.columns[rfe.support_]\n",
+       "print(\"\\nĐặc trưng được chọn bởi RFE:\")\n",
+       "print(selected_features)"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "6bb2e53b",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 4.4. Sử dụng Embedded Method: Tầm quan trọng theo RandomForest\n",
+       "rf = RandomForestClassifier(n_estimators=100, random_state=42)\n",
+       "rf.fit(X, y)\n",
+       "importances = rf.feature_importances_\n",
+       "feat_importance = pd.Series(importances, index=X.columns).sort_values(ascending=False)\n",
+       "\n",
+       "plt.figure(figsize=(12,6))\n",
+       "feat_importance.plot(kind='bar')\n",
+       "plt.title(\"Feature Importance theo RandomForest\")\n",
+       "plt.show()"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b7e5d1a7",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 5. Xây dựng mô hình dự đoán\n",
+       "# Sử dụng các đặc trưng được chọn bởi RFE\n",
+       "X_selected = X[selected_features]\n",
+       "\n",
+       "# Chia dữ liệu thành tập huấn luyện và tập kiểm tra\n",
+       "X_train, X_test, y_train, y_test = train_test_split(X_selected, y, test_size=0.2, random_state=42)\n",
+       "\n",
+       "# Huấn luyện mô hình với Logistic Regression\n",
+       "model = LogisticRegression(max_iter=1000)\n",
+       "model.fit(X_train, y_train)\n",
+       "\n",
+       "# Dự đoán và đánh giá mô hình\n",
+       "y_pred = model.predict(X_test)\n",
+       "print(\"\\nĐánh giá mô hình Logistic Regression:\")\n",
+       "print(\"Accuracy: \", accuracy_score(y_test, y_pred))\n",
+       "print(\"Precision:\", precision_score(y_test, y_pred))\n",
+       "print(\"Recall:   \", recall_score(y_test, y_pred))\n",
+       "print(\"F1 Score: \", f1_score(y_test, y_pred))\n",
+       "\n",
+       "# Ma trận nhầm lẫn\n",
+       "cm = confusion_matrix(y_test, y_pred)\n",
+       "plt.figure(figsize=(6, 4))\n",
+       "sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')\n",
+       "plt.xlabel('Dự đoán')\n",
+       "plt.ylabel('Thực tế')\n",
+       "plt.title(\"Ma trận nhầm lẫn\")\n",
+       "plt.show()\n",
+       "\n",
+       "# Cross-validation\n",
+       "cv_scores = cross_val_score(model, X_selected, y, cv=5)\n",
+       "print(\"\\nCross-validation scores:\", cv_scores)\n",
+       "print(\"Mean CV score:\", cv_scores.mean())"
+      ]
+     },
+     {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "80cf7ac1",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+       "# 6. Lưu mô hình\n",
+       "joblib.dump(model, 'graduation_prediction_model.pkl')\n",
+       "print(\"\\nMô hình đã được lưu thành 'graduation_prediction_model.pkl'\")"
+      ]
+     }
+    ],
+    "metadata": {
+     "kernelspec": {
+      "display_name": "Python 3",
+      "language": "python",
+      "name": "python3"
+     },
+     "language_info": {
+      "name": "python",
+      "version": "3.x"
+     }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 5
+   }
+   

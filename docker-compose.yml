@@ -1,0 +1,30 @@
+version: '3'
+
+services:
+  app:
+    build: .
+    container_name: learning_alert_be_app
+    depends_on:
+      - db
+    ports:
+      - "15000:8000"
+    restart: unless-stopped
+    env_file:
+      - ./.env
+
+  db:
+    container_name: learning_alert_postgres
+    volumes:
+      - ./.docker/postgres-data:/var/lib/postgresql/data:z
+    ports:
+      - "54213:5432"
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=test1234
+      - POSTGRES_DB=learning_alert_system
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+
